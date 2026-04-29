@@ -1,0 +1,32 @@
+{
+  "name": "map-activity",
+  "version": "1.0.0",
+  "description": "Travel pin map SPA for event guests and TV display.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/clarencecai/map-activity.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "UNLICENSED",
+  "bugs": {
+    "url": "https://github.com/clarencecai/map-activity/issues"
+  },
+  "homepage": "https://github.com/clarencecai/map-activity#readme",
+  "dependencies": {
+    "firebase": "^12.12.1",
+    "leaflet": "^1.9.4",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "firebase-tools": "^15.15.0",
+    "vite": "^8.0.10"
+  }
+}
