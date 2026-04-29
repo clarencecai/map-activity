@@ -1,0 +1,67 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isAdmin() {
+      return request.auth != null
+        && request.auth.token.email is string
+        && eventConfig().data.adminEmails.hasAny([request.auth.token.email]);
+    }
+
+    function isGoogleUser() {
+      return request.auth != null
+        && request.auth.token.email is string;
+    }
+
+    function eventConfig() {
+      return get(/databases/$(database)/documents/config/event);
+    }
+
+    function validPinCreate() {
+      return request.resource.data.keys().hasOnly([
+          'lat',
+          'lng',
+          'userName',
+          'locationName',
+          'note',
+          'ownerId',
+          'eventKey',
+          'createdAt'
+        ])
+        && request.resource.data.eventKey == eventConfig().data.eventKey
+        && eventConfig().data.active == true
+        && request.resource.data.ownerId == request.auth.uid
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.lat is number
+        && request.resource.data.lat >= -90
+        && request.resource.data.lat <= 90
+        && request.resource.data.lng is number
+        && request.resource.data.lng >= -180
+        && request.resource.data.lng <= 180
+        && request.resource.data.userName is string
+        && request.resource.data.userName.size() > 0
+        && request.resource.data.userName.size() < 80
+        && request.resource.data.locationName is string
+        && request.resource.data.locationName.size() > 0
+        && request.resource.data.locationName.size() < 100
+        && (!('note' in request.resource.data)
+          || (request.resource.data.note is string
+            && request.resource.data.note.size() <= 240));
+    }
+
+    match /config/event {
+      allow read: if isGoogleUser();
+      allow write: if isAdmin();
+    }
+
+    match /config/admin {
+      allow read, write: if isAdmin();
+    }
+
+    match /pins/{pinId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && validPinCreate();
+      allow update, delete: if isAdmin();
+    }
+  }
+}
