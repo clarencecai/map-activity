@@ -36,16 +36,21 @@ const WORLD_BOUNDS = [[-60, -180], [85, 180]];
 const DISPLAY_WORLD_BOUNDS = [[-55, -180], [72, 140]];
 const DISPLAY_INITIAL_PAN = [130, 0];
 const DISPLAY_ANIMATION_DURATION_SECONDS = 2.25;
-const DISPLAY_ANIMATION_HOLD_MS = 10000;
-const RANDOM_PIN_DETAILS_MS = 3000;
+const DISPLAY_ANIMATION_HOLD_MS = 20000;
+const DISPLAY_WORLD_VIEW_HOLD_MS = 60000;
+const RANDOM_PIN_DETAILS_MS = 8000;
+const PIN_DETAILS_PER_BATCH = 5;
+const CITY_INDEX_URL = '/cities.min.json';
 const DISPLAY_ANIMATION_VIEWS = [
-  { label: 'Europe', bounds: [[35, -12], [72, 35]] },
-  { label: 'North America', bounds: [[8, -170], [72, -52]] },
-  { label: 'South America', bounds: [[-56, -86], [14, -32]] },
-  { label: 'Africa', bounds: [[-36, -20], [38, 52]] },
-  { label: 'Asia', bounds: [[-10, 45], [72, 150]] },
-  { label: 'Australia-New Zealand', bounds: [[-48, 108], [-9, 180]] },
-  { label: 'Original view', bounds: DISPLAY_WORLD_BOUNDS, home: true },
+  { label: 'Europe', shortLabel: 'EU', bounds: [[35, -12], [72, 35]] },
+  { label: 'North America', shortLabel: 'NAm', bounds: [[8, -170], [72, -52]] },
+  { label: 'South America', shortLabel: 'SAm', bounds: [[-56, -86], [14, -32]] },
+  { label: 'Africa', shortLabel: 'AF', bounds: [[-36, -20], [38, 52]] },
+  { label: 'Asia', shortLabel: 'Asia', bounds: [[-10, 45], [72, 150]] },
+  { label: 'South-east Asia', shortLabel: 'SEA', bounds: [[-12, 92], [25, 142]] },
+  { label: 'Singapore', shortLabel: 'SG', bounds: [[1.16, 103.55], [1.48, 104.12]] },
+  { label: 'Australia-New Zealand', shortLabel: 'ANZ', bounds: [[-48, 108], [-9, 180]] },
+  { label: 'Original view', shortLabel: 'World', bounds: DISPLAY_WORLD_BOUNDS, home: true },
 ];
 const app = document.querySelector('#app');
 
@@ -71,6 +76,7 @@ const animatedPinIcon = L.icon({
 });
 
 const activeCleanups = [];
+let cityIndexPromise = null;
 
 function cleanup() {
   while (activeCleanups.length > 0) {
@@ -110,6 +116,42 @@ function escapeHtml(value = '') {
     '"': '&quot;',
     "'": '&#39;',
   }[char]));
+}
+
+function normalizeCityText(value = '') {
+  return String(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase();
+}
+
+function loadCityIndex() {
+  if (!cityIndexPromise) {
+    cityIndexPromise = fetch(CITY_INDEX_URL)
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`Could not load city list (${response.status})`);
+        }
+        return response.json();
+      })
+      .then((rows) => rows.map(([city, state, country, lat, lng]) => {
+        const searchText = normalizeCityText(`${city} ${state} ${country}`);
+        const normalizedCity = normalizeCityText(city);
+
+        return {
+          city,
+          state,
+          country,
+          lat,
+          lng,
+          label: `${city}, ${country}`,
+          searchText,
+          normalizedCity,
+        };
+      }));
+  }
+
+  return cityIndexPromise;
 }
 
 function formatDate(timestamp) {
@@ -326,6 +368,22 @@ function createPinSpotlight(pin) {
   `;
 }
 
+function animationDurationMs() {
+  return DISPLAY_ANIMATION_DURATION_SECONDS * 1000;
+}
+
+function createdAtMillis(pin) {
+  if (pin.createdAt?.toMillis) {
+    return pin.createdAt.toMillis();
+  }
+
+  if (pin.createdAt?.toDate) {
+    return pin.createdAt.toDate().getTime();
+  }
+
+  return 0;
+}
+
 function createTravelPin(pin, animate = true) {
   const marker = createPinMarker([pin.lat, pin.lng], animate);
   marker.bindPopup(createPinPopup(pin), {
@@ -371,12 +429,26 @@ function renderDisplay() {
           <span>Scan to add your pin</span>
           <img data-guest-qr-image alt="QR code for the guest pin submission page" />
         </a>
-        <label class="animation-toggle">
-          <input type="checkbox" data-animation-toggle />
-          <span>Animate map</span>
-        </label>
-        <span class="pin-spotlight-line" data-pin-spotlight-line hidden></span>
-        <article class="pin-spotlight" data-pin-spotlight hidden></article>
+        <div class="display-controls">
+          <div class="view-jump-controls" aria-label="Map view shortcuts">
+            ${DISPLAY_ANIMATION_VIEWS.map((view, index) => `
+              <button class="view-jump-button" type="button" data-view-index="${index}" aria-label="Show ${escapeHtml(view.label)}" aria-pressed="false">
+                ${escapeHtml(view.shortLabel)}
+              </button>
+            `).join('')}
+          </div>
+          <div class="display-mode-controls">
+            <label class="control-toggle">
+              <input type="checkbox" data-show-messages-toggle />
+              <span>Show msg</span>
+            </label>
+            <label class="control-toggle">
+              <input type="checkbox" data-animation-toggle />
+              <span>Animate</span>
+            </label>
+          </div>
+        </div>
+        <div class="pin-spotlight-layer" data-pin-spotlight-layer></div>
         <div class="sr-only" data-display-status aria-live="polite">Loading event...</div>
       </main>
     `);
@@ -397,6 +469,7 @@ function renderDisplay() {
       wheelPxPerZoomLevel: 120,
       zoomSnap: 0.25,
     });
+    const pinSpotlightLinePane = map.createPane('pinSpotlightLine');
     const markers = new Map();
     let pinUnsubscribe = null;
     const status = app.querySelector('[data-display-status]');
@@ -405,13 +478,18 @@ function renderDisplay() {
     const guestQr = app.querySelector('[data-guest-qr]');
     const guestQrImage = app.querySelector('[data-guest-qr-image]');
     const animationToggle = app.querySelector('[data-animation-toggle]');
-    const pinSpotlight = app.querySelector('[data-pin-spotlight]');
-    const pinSpotlightLine = app.querySelector('[data-pin-spotlight-line]');
+    const showMessagesToggle = app.querySelector('[data-show-messages-toggle]');
+    const pinSpotlightLayer = app.querySelector('[data-pin-spotlight-layer]');
+    const viewButtons = Array.from(app.querySelectorAll('[data-view-index]'));
     let lastGuestUrl = '';
     let animationTimer = null;
     let pinDetailsTimer = null;
     let animationStep = 0;
     let nextPinDetailsAllowedAt = 0;
+    let currentViewEndsAt = 0;
+    let currentFocusBounds = L.latLngBounds(DISPLAY_WORLD_BOUNDS);
+    const highlightedMarkers = new Set();
+    const shownPinCounts = new Map();
 
     const getOverlayRects = () => {
       const container = map.getContainer();
@@ -419,7 +497,7 @@ function renderDisplay() {
       const overlayElements = [
         app.querySelector('.display-title'),
         guestQr.hidden ? null : guestQr,
-        animationToggle.closest('.animation-toggle'),
+        app.querySelector('.display-controls'),
       ].filter(Boolean);
       const overlayRects = overlayElements.map((element) => {
         const rect = element.getBoundingClientRect();
@@ -431,6 +509,29 @@ function renderDisplay() {
         };
       });
       return overlayRects;
+    };
+
+    const getPinAvoidRect = (marker) => {
+      const container = map.getContainer();
+      const containerRect = container.getBoundingClientRect();
+      if (!map.getBounds().contains(marker.getLatLng())) {
+        return null;
+      }
+
+      const point = map.latLngToContainerPoint(marker.getLatLng());
+      if (point.x < 0
+        || point.x > containerRect.width
+        || point.y < 0
+        || point.y > containerRect.height) {
+        return null;
+      }
+
+      return {
+        left: point.x - 32,
+        right: point.x + 32,
+        top: point.y - 62,
+        bottom: point.y + 22,
+      };
     };
 
     const rectOverlaps = (rect, otherRect) => rect.left < otherRect.right
@@ -460,24 +561,50 @@ function renderDisplay() {
       return insideMap && !behindOverlay;
     };
 
-    const positionPinSpotlight = (marker) => {
+    const pointIsInFocus = (latLng) => currentFocusBounds.contains(latLng);
+
+    const clearHighlightedMarkers = () => {
+      highlightedMarkers.forEach((marker) => {
+        marker.getElement()?.classList.remove('pin-marker--highlighted');
+        marker.setZIndexOffset(0);
+      });
+      highlightedMarkers.clear();
+    };
+
+    const positionPinSpotlight = (marker, pin, occupiedRects, featuredPinRects, staggerIndex) => {
       const container = map.getContainer();
       const containerRect = container.getBoundingClientRect();
       const point = map.latLngToContainerPoint(marker.getLatLng());
-      const overlayRects = getOverlayRects();
+      const ownPinRect = getPinAvoidRect(marker);
+      const overlayRects = [
+        ...getOverlayRects(),
+        ...(ownPinRect ? [ownPinRect] : []),
+        ...featuredPinRects,
+        ...occupiedRects,
+      ];
       const margin = 10;
-      const gap = 22;
+      const gap = 28;
+      const sideGap = 44;
+      const topGap = 68;
+      const pinSpotlight = document.createElement('article');
+      const pinSpotlightLine = document.createElement('span');
 
+      pinSpotlight.className = 'pin-spotlight';
+      pinSpotlight.innerHTML = createPinSpotlight(pin);
+      pinSpotlightLine.className = 'pin-spotlight-line';
+      pinSpotlight.style.animationDelay = `${staggerIndex * 180}ms`;
+      pinSpotlightLine.style.animationDelay = `${staggerIndex * 180}ms`;
       pinSpotlight.style.visibility = 'hidden';
-      pinSpotlight.hidden = false;
+      pinSpotlightLayer.append(pinSpotlight);
+      pinSpotlightLinePane.append(pinSpotlightLine);
       pinSpotlightLine.hidden = true;
 
       const width = pinSpotlight.offsetWidth;
       const height = pinSpotlight.offsetHeight;
       const placements = [
-        { name: 'top', left: point.x - (width / 2), top: point.y - height - gap },
-        { name: 'right', left: point.x + gap, top: point.y - (height / 2) },
-        { name: 'left', left: point.x - width - gap, top: point.y - (height / 2) },
+        { name: 'top', left: point.x - (width / 2), top: point.y - height - topGap },
+        { name: 'right', left: point.x + sideGap, top: point.y - (height / 2) },
+        { name: 'left', left: point.x - width - sideGap, top: point.y - (height / 2) },
         { name: 'bottom', left: point.x - (width / 2), top: point.y + gap },
       ];
 
@@ -498,9 +625,9 @@ function renderDisplay() {
       let placement = placements.find(fits);
       if (!placement) {
         placement = {
-        name: 'clamped',
-        left: Math.min(Math.max(point.x - (width / 2), margin), containerRect.width - width - margin),
-        top: Math.min(Math.max(point.y - height - gap, margin), containerRect.height - height - margin),
+          name: 'clamped',
+          left: Math.min(Math.max(point.x - (width / 2), margin), containerRect.width - width - margin),
+          top: Math.min(Math.max(point.y - height - gap, margin), containerRect.height - height - margin),
         };
         const rect = {
           left: placement.left,
@@ -509,7 +636,8 @@ function renderDisplay() {
           bottom: placement.top + height,
         };
         if (overlayRects.some((overlayRect) => rectOverlaps(rect, overlayRect))) {
-          hidePinSpotlight();
+          pinSpotlight.remove();
+          pinSpotlightLine.remove();
           return false;
         }
       }
@@ -518,87 +646,179 @@ function renderDisplay() {
       pinSpotlight.style.left = `${placement.left}px`;
       pinSpotlight.style.top = `${placement.top}px`;
       pinSpotlight.style.visibility = '';
+      occupiedRects.push({
+        left: placement.left - 12,
+        top: placement.top - 12,
+        right: placement.left + width + 12,
+        bottom: placement.top + height + 12,
+      });
 
       const anchorX = Math.min(Math.max(point.x, placement.left), placement.left + width);
       const anchorY = Math.min(Math.max(point.y, placement.top), placement.top + height);
-      const dx = anchorX - point.x;
-      const dy = anchorY - point.y;
+      const layerPoint = map.latLngToLayerPoint(marker.getLatLng());
+      const anchorLayerPoint = map.containerPointToLayerPoint(L.point(anchorX, anchorY));
+      const dx = anchorLayerPoint.x - layerPoint.x;
+      const dy = anchorLayerPoint.y - layerPoint.y;
       const length = Math.hypot(dx, dy);
       if (length > 10) {
-        pinSpotlightLine.style.left = `${point.x}px`;
-        pinSpotlightLine.style.top = `${point.y}px`;
+        pinSpotlightLine.style.left = `${layerPoint.x}px`;
+        pinSpotlightLine.style.top = `${layerPoint.y}px`;
         pinSpotlightLine.style.width = `${length}px`;
         pinSpotlightLine.style.transform = `rotate(${Math.atan2(dy, dx)}rad)`;
         pinSpotlightLine.hidden = false;
+      }
+      marker.getElement()?.classList.add('pin-marker--highlighted');
+      marker.setZIndexOffset(1000);
+      highlightedMarkers.add(marker);
+      if (ownPinRect) {
+        featuredPinRects.push(ownPinRect);
       }
       return true;
     };
 
     const hidePinSpotlight = () => {
-      pinSpotlight.hidden = true;
-      pinSpotlight.innerHTML = '';
-      pinSpotlightLine.hidden = true;
+      pinSpotlightLayer.innerHTML = '';
+      pinSpotlightLinePane.replaceChildren();
+      clearHighlightedMarkers();
+    };
+
+    const messagesAreEnabled = () => animationToggle.checked || showMessagesToggle.checked;
+
+    const scheduleNextPinDetails = () => {
+      if (messagesAreEnabled()
+        && Date.now() + RANDOM_PIN_DETAILS_MS < currentViewEndsAt - 100) {
+        pinDetailsTimer = window.setTimeout(showRandomPinDetails, RANDOM_PIN_DETAILS_MS);
+      }
     };
 
     const showRandomPinDetails = () => {
+      if (!animationToggle.checked) {
+        currentFocusBounds = map.getBounds();
+        currentViewEndsAt = Number.POSITIVE_INFINITY;
+      }
+
       if (Date.now() < nextPinDetailsAllowedAt || markers.size === 0) {
         map.closePopup();
         hidePinSpotlight();
+        scheduleNextPinDetails();
         return;
       }
 
-      const candidates = Array.from(markers.values())
-        .filter(({ marker }) => markerIsVisible(marker));
+      const candidates = Array.from(markers.entries())
+        .map(([id, item]) => ({ id, ...item }))
+        .filter(({ marker }) => markerIsVisible(marker) && pointIsInFocus(marker.getLatLng()));
       if (candidates.length === 0) {
         map.closePopup();
         hidePinSpotlight();
+        scheduleNextPinDetails();
         return;
       }
 
-      const shuffledCandidates = [...candidates].sort(() => Math.random() - 0.5);
       map.closePopup();
-      for (const { marker, pin } of shuffledCandidates) {
-        pinSpotlight.innerHTML = createPinSpotlight(pin);
-        if (positionPinSpotlight(marker)) {
+      hidePinSpotlight();
+      const occupiedRects = [];
+      const featuredPinRects = [];
+      const sortedCandidates = candidates
+        .map((candidate) => ({
+          ...candidate,
+          shownCount: shownPinCounts.get(candidate.id) || 0,
+          createdAtMs: createdAtMillis(candidate.pin),
+          randomTieBreaker: Math.random(),
+        }))
+        .sort((a, b) => a.shownCount - b.shownCount
+          || b.createdAtMs - a.createdAtMs
+          || a.randomTieBreaker - b.randomTieBreaker);
+
+      for (const { id, marker, pin } of sortedCandidates) {
+        if (positionPinSpotlight(marker, pin, occupiedRects, featuredPinRects, occupiedRects.length)) {
+          shownPinCounts.set(id, (shownPinCounts.get(id) || 0) + 1);
+        }
+
+        if (occupiedRects.length >= PIN_DETAILS_PER_BATCH) {
+          scheduleNextPinDetails();
           return;
         }
       }
 
+      if (occupiedRects.length === 0) {
+        hidePinSpotlight();
+      }
+
+      scheduleNextPinDetails();
+    };
+
+    const stopMessagePlayback = () => {
+      window.clearTimeout(pinDetailsTimer);
+      pinDetailsTimer = null;
+      map.closePopup();
       hidePinSpotlight();
     };
 
-    const startRandomPinDetails = () => {
-      window.clearInterval(pinDetailsTimer);
-      pinDetailsTimer = window.setInterval(showRandomPinDetails, RANDOM_PIN_DETAILS_MS);
-      window.setTimeout(() => {
+    const startStaticMessages = () => {
+      window.clearTimeout(pinDetailsTimer);
+      nextPinDetailsAllowedAt = Date.now();
+      currentFocusBounds = map.getBounds();
+      currentViewEndsAt = Number.POSITIVE_INFINITY;
+      showRandomPinDetails();
+    };
+
+    const getViewHoldMs = (view) => (view.home ? DISPLAY_WORLD_VIEW_HOLD_MS : DISPLAY_ANIMATION_HOLD_MS);
+
+    const setActiveViewButton = (activeIndex) => {
+      viewButtons.forEach((button, index) => {
+        const isActive = index === activeIndex;
+        button.classList.toggle('view-jump-button--active', isActive);
+        button.setAttribute('aria-pressed', String(isActive));
+      });
+    };
+
+    const scheduleAnimationStep = (viewHoldMs) => {
+      pinDetailsTimer = window.setTimeout(() => {
         if (animationToggle.checked) {
           showRandomPinDetails();
         }
-      }, DISPLAY_ANIMATION_DURATION_SECONDS * 1000);
+      }, animationDurationMs());
+      animationTimer = window.setTimeout(
+        runAnimationStep,
+        animationDurationMs() + viewHoldMs,
+      );
     };
 
-    const stopAnimation = (returnHome = true) => {
+    const viewHasMessagePins = (view) => {
+      const bounds = L.latLngBounds(view.bounds);
+      return Array.from(markers.values()).some(({ marker }) => bounds.contains(marker.getLatLng()));
+    };
+
+    const nextPopulatedAnimationViewIndex = (startIndex) => {
+      if (markers.size === 0) {
+        return startIndex;
+      }
+
+      for (let offset = 0; offset < DISPLAY_ANIMATION_VIEWS.length; offset += 1) {
+        const viewIndex = (startIndex + offset) % DISPLAY_ANIMATION_VIEWS.length;
+        if (viewHasMessagePins(DISPLAY_ANIMATION_VIEWS[viewIndex])) {
+          return viewIndex;
+        }
+      }
+
+      return startIndex;
+    };
+
+    const showAnimationView = (viewIndex, continueAnimation) => {
+      const normalizedIndex = ((viewIndex % DISPLAY_ANIMATION_VIEWS.length) + DISPLAY_ANIMATION_VIEWS.length)
+        % DISPLAY_ANIMATION_VIEWS.length;
+      const view = DISPLAY_ANIMATION_VIEWS[normalizedIndex];
+      const viewHoldMs = getViewHoldMs(view);
       window.clearTimeout(animationTimer);
-      window.clearInterval(pinDetailsTimer);
-      animationTimer = null;
-      pinDetailsTimer = null;
-      animationStep = 0;
-      map.stop();
+      window.clearTimeout(pinDetailsTimer);
       map.closePopup();
+      map.stop();
       hidePinSpotlight();
-      if (returnHome) {
-        moveToDisplayHome(map);
-      }
-    };
+      setActiveViewButton(normalizedIndex);
+      currentFocusBounds = L.latLngBounds(view.bounds);
+      nextPinDetailsAllowedAt = Date.now() + animationDurationMs();
+      currentViewEndsAt = Date.now() + animationDurationMs() + viewHoldMs;
 
-    const runAnimationStep = () => {
-      if (!animationToggle.checked) {
-        return;
-      }
-
-      const view = DISPLAY_ANIMATION_VIEWS[animationStep % DISPLAY_ANIMATION_VIEWS.length];
-      hidePinSpotlight();
-      nextPinDetailsAllowedAt = Date.now() + (DISPLAY_ANIMATION_DURATION_SECONDS * 1000);
       if (view.home) {
         moveToDisplayHome(map);
       } else {
@@ -609,23 +829,68 @@ function renderDisplay() {
         });
       }
 
-      animationStep += 1;
-      window.setTimeout(() => {
-        if (animationToggle.checked) {
-          showRandomPinDetails();
-        }
-      }, DISPLAY_ANIMATION_DURATION_SECONDS * 1000);
-      animationTimer = window.setTimeout(runAnimationStep, DISPLAY_ANIMATION_HOLD_MS);
+      animationStep = (normalizedIndex + 1) % DISPLAY_ANIMATION_VIEWS.length;
+      if (continueAnimation) {
+        scheduleAnimationStep(viewHoldMs);
+      } else if (showMessagesToggle.checked) {
+        pinDetailsTimer = window.setTimeout(startStaticMessages, animationDurationMs());
+      }
+    };
+
+    const stopAnimation = (returnHome = true) => {
+      window.clearTimeout(animationTimer);
+      animationTimer = null;
+      animationStep = 0;
+      map.stop();
+      stopMessagePlayback();
+      if (returnHome) {
+        moveToDisplayHome(map);
+        setActiveViewButton(DISPLAY_ANIMATION_VIEWS.findIndex((view) => view.home));
+      }
+    };
+
+    const runAnimationStep = () => {
+      if (!animationToggle.checked) {
+        return;
+      }
+
+      showAnimationView(nextPopulatedAnimationViewIndex(animationStep), true);
     };
 
     animationToggle.addEventListener('change', () => {
       if (animationToggle.checked) {
+        showMessagesToggle.checked = false;
         runAnimationStep();
-        startRandomPinDetails();
       } else {
         stopAnimation();
       }
     });
+
+    showMessagesToggle.addEventListener('change', () => {
+      if (showMessagesToggle.checked) {
+        if (animationToggle.checked) {
+          animationToggle.checked = false;
+          stopAnimation(false);
+        } else {
+          stopMessagePlayback();
+        }
+        startStaticMessages();
+      } else if (!animationToggle.checked) {
+        stopMessagePlayback();
+      }
+    });
+
+    viewButtons.forEach((button) => {
+      button.addEventListener('click', () => {
+        const viewIndex = Number(button.dataset.viewIndex);
+        if (!Number.isInteger(viewIndex)) {
+          return;
+        }
+
+        showAnimationView(viewIndex, animationToggle.checked);
+      });
+    });
+    setActiveViewButton(DISPLAY_ANIMATION_VIEWS.findIndex((view) => view.home));
 
     const updatePinCount = () => {
       const count = markers.size;
@@ -674,6 +939,7 @@ function renderDisplay() {
       }
 
       const pinsQuery = query(collection(db, 'pins'), where('eventKey', '==', config.eventKey || ''));
+      let hasLoadedInitialPins = false;
       pinUnsubscribe = onSnapshot(pinsQuery, (pinsSnapshot) => {
         pinsSnapshot.docChanges().forEach((change) => {
           const id = change.doc.id;
@@ -682,6 +948,7 @@ function renderDisplay() {
           if (change.type === 'removed') {
             markers.get(id)?.marker.remove();
             markers.delete(id);
+            shownPinCounts.delete(id);
             return;
           }
 
@@ -698,10 +965,11 @@ function renderDisplay() {
             return;
           }
 
-          const marker = createTravelPin(pin).addTo(map);
-          markers.set(id, { marker, pin });
+          const marker = createTravelPin(pin, hasLoadedInitialPins).addTo(map);
+          markers.set(id, { id, marker, pin });
         });
 
+        hasLoadedInitialPins = true;
         updatePinCount();
       }, (error) => {
         status.textContent = `Could not load pins: ${error.message}`;
@@ -747,11 +1015,20 @@ function renderGuest() {
         <p class="eyebrow">Travel Pin Map</p>
         <h1>Drop a pin somewhere you have travelled</h1>
         <p class="muted">Tap the map to choose a place, then tell us who you are and what it means to you.</p>
+        <div class="city-search">
+          <label>
+            Search for a city
+            <input data-city-search type="search" placeholder="Loading city list..." autocomplete="off" disabled />
+          </label>
+          <div class="city-results" data-city-results role="listbox" aria-label="City search results"></div>
+          <p class="city-search-status" data-city-search-status>Loading city list...</p>
+          <p class="city-data-credit">City data from <a href="https://github.com/dr5hn/countries-states-cities-database" target="_blank" rel="noreferrer">Countries States Cities Database</a>.</p>
+        </div>
         <div class="guest-map" id="guest-map" aria-label="Choose a pin location"></div>
         <form class="pin-form" data-pin-form>
           <label>
             Your name
-            <input name="userName" type="text" placeholder="e.g. Clarence" maxlength="79" autocomplete="name" required />
+            <input name="userName" type="text" maxlength="79" autocomplete="name" required />
           </label>
           <label>
             What does this location mean to you?
@@ -775,6 +1052,13 @@ function renderGuest() {
   });
   let selected = null;
   let selectedMarker = null;
+  let citySearchTimer = null;
+  let cityIndex = [];
+  let cityResults = [];
+  let isGuestPageActive = true;
+  const citySearch = app.querySelector('[data-city-search]');
+  const cityResultsList = app.querySelector('[data-city-results]');
+  const citySearchStatus = app.querySelector('[data-city-search-status]');
   const selectedLocation = app.querySelector('[data-selected-location]');
   const submitButton = app.querySelector('[data-submit]');
   const formStatus = app.querySelector('[data-form-status]');
@@ -784,21 +1068,142 @@ function renderGuest() {
     submitButton.disabled = !selected || !auth.currentUser;
   };
 
-  map.on('click', (event) => {
+  const setSelectedLocation = (latlng, label = '') => {
     selected = {
-      lat: Number(event.latlng.lat.toFixed(6)),
-      lng: Number(event.latlng.lng.toFixed(6)),
+      lat: Number(latlng.lat.toFixed(6)),
+      lng: Number(latlng.lng.toFixed(6)),
     };
 
     if (selectedMarker) {
-      selectedMarker.setLatLng(event.latlng);
+      selectedMarker.setLatLng(latlng);
     } else {
-      selectedMarker = createPinMarker(event.latlng).addTo(map);
+      selectedMarker = createPinMarker(latlng).addTo(map);
     }
 
-    selectedLocation.textContent = `Selected: ${selected.lat}, ${selected.lng}`;
+    selectedLocation.textContent = label
+      ? `Selected: ${label}`
+      : `Selected: ${selected.lat}, ${selected.lng}`;
     formStatus.textContent = '';
     updateSubmitState();
+  };
+
+  const renderCityResults = () => {
+    if (cityResults.length === 0) {
+      cityResultsList.innerHTML = '';
+      cityResultsList.hidden = true;
+      return;
+    }
+
+    cityResultsList.innerHTML = cityResults.map((result, index) => `
+      <button type="button" role="option" data-city-result="${index}">
+        <span class="city-result-label">${escapeHtml(result.label)}</span>
+        ${result.state ? `<span class="city-result-meta">${escapeHtml(result.state)}</span>` : ''}
+      </button>
+    `).join('');
+    cityResultsList.hidden = false;
+  };
+
+  const searchCities = (queryText) => {
+    const trimmedQuery = queryText.trim();
+    if (trimmedQuery.length < 2) {
+      cityResults = [];
+      citySearchStatus.textContent = cityIndex.length === 0 ? 'Loading city list...' : '';
+      renderCityResults();
+      return;
+    }
+
+    if (cityIndex.length === 0) {
+      cityResults = [];
+      renderCityResults();
+      citySearchStatus.textContent = 'Loading city list...';
+      return;
+    }
+
+    const normalizedQuery = normalizeCityText(trimmedQuery);
+    const queryTokens = normalizedQuery.split(/\s+/).filter(Boolean);
+    const matches = [];
+    const seenLocations = new Set();
+
+    for (const city of cityIndex) {
+      if (!queryTokens.every((token) => city.searchText.includes(token))) {
+        continue;
+      }
+
+      const locationKey = `${city.city}\u0000${city.state}\u0000${city.country}\u0000${city.lat}\u0000${city.lng}`;
+      if (seenLocations.has(locationKey)) {
+        continue;
+      }
+      seenLocations.add(locationKey);
+
+      const score = city.normalizedCity === normalizedQuery
+        ? 0
+        : city.normalizedCity.startsWith(normalizedQuery)
+          ? 1
+          : city.searchText.startsWith(normalizedQuery)
+            ? 2
+            : 3;
+
+      matches.push({ ...city, score });
+    }
+
+    cityResults = matches
+      .sort((a, b) => a.score - b.score
+        || a.city.localeCompare(b.city)
+        || a.country.localeCompare(b.country)
+        || a.state.localeCompare(b.state))
+      .slice(0, 8);
+
+    citySearchStatus.textContent = cityResults.length === 0 ? 'No city matches found.' : '';
+    renderCityResults();
+  };
+
+  loadCityIndex()
+    .then((cities) => {
+      if (!isGuestPageActive) {
+        return;
+      }
+
+      cityIndex = cities;
+      citySearch.disabled = false;
+      citySearch.placeholder = 'Type a city name';
+      citySearchStatus.textContent = '';
+      searchCities(citySearch.value);
+    })
+    .catch((error) => {
+      if (!isGuestPageActive) {
+        return;
+      }
+
+      citySearchStatus.textContent = `Could not load city list: ${error.message}`;
+    });
+
+  citySearch.addEventListener('input', () => {
+    window.clearTimeout(citySearchTimer);
+    citySearchTimer = window.setTimeout(() => searchCities(citySearch.value), 150);
+  });
+
+  cityResultsList.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-city-result]');
+    if (!button) {
+      return;
+    }
+
+    const result = cityResults[Number(button.dataset.cityResult)];
+    if (!result) {
+      return;
+    }
+
+    const latlng = L.latLng(result.lat, result.lng);
+    setSelectedLocation(latlng, result.label);
+    map.setView(latlng, Math.max(map.getZoom(), 8), { animate: true });
+    citySearch.value = result.label;
+    cityResults = [];
+    citySearchStatus.textContent = '';
+    renderCityResults();
+  });
+
+  map.on('click', (event) => {
+    setSelectedLocation(event.latlng);
   });
 
   signInAnonymously(auth)
@@ -867,6 +1272,10 @@ function renderGuest() {
   const onResize = () => map.invalidateSize();
   window.addEventListener('resize', onResize);
   activeCleanups.push(
+    () => {
+      isGuestPageActive = false;
+    },
+    () => window.clearTimeout(citySearchTimer),
     () => window.removeEventListener('resize', onResize),
     () => map.remove(),
   );

@@ -2,6 +2,10 @@
 
 A browser-only SPA for an event travel map. The TV display lives at `/`, guests submit pins at `/guest?k=<event-key>`, and admins manage the event at `/admin`.
 
+City search data is derived from [Countries States Cities Database](https://github.com/dr5hn/countries-states-cities-database), licensed under ODbL-1.0.
+
+Regenerate the reduced local city index with `npm run build:city-index`; the script downloads the upstream city export and writes `public/cities.min.json`.
+
 ## Setup
 
 1. Create a Firebase project, enable Authentication providers for Google and Anonymous, and enable Firestore.
@@ -27,6 +31,22 @@ firebase deploy --only hosting
 ```
 
 The admin allowlist lives in `/config/event.adminEmails` and is enforced by Firestore rules. It is not hardcoded in the frontend.
+
+## Demo pin seeding
+
+Generate realistic Asia travel pins with Firebase anonymous auth and the Firestore REST API:
+
+```sh
+EVENT_KEY="<event-key>" npm run seed:asia-pins
+```
+
+By default, the script creates 200 pins and writes one pin every 3 seconds. For a faster one-off seed, override the interval:
+
+```sh
+EVENT_KEY="<event-key>" npm run seed:asia-pins -- --count 200 --interval-ms 0
+```
+
+The script reads Firebase web config from `.env.local` or `.env`, signs in anonymously, and each generated pin is still validated by the Firestore security rules.
 
 ## Event flow
 
