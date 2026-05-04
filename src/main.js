@@ -29,6 +29,7 @@ import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
 import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 import { auth, db, missingFirebaseConfig } from './firebase.js';
+import { censorProfanity } from './profanity.js';
 
 const TILE_URL = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
 const TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
@@ -1223,9 +1224,15 @@ function renderGuest() {
     }
 
     const formData = new FormData(form);
-    const userName = String(formData.get('userName') || '').trim();
-    const locationName = String(formData.get('locationName') || '').trim();
-    const note = String(formData.get('note') || '').trim();
+    const rawUserName = String(formData.get('userName') || '').trim();
+    const rawLocationName = String(formData.get('locationName') || '').trim();
+    const rawNote = String(formData.get('note') || '').trim();
+    const userName = censorProfanity(rawUserName);
+    const locationName = censorProfanity(rawLocationName);
+    const note = censorProfanity(rawNote);
+    const contentWasCensored = userName !== rawUserName
+      || locationName !== rawLocationName
+      || note !== rawNote;
 
     if (!userName) {
       formStatus.textContent = 'Add your name before submitting.';
@@ -1257,7 +1264,9 @@ function renderGuest() {
       selectedMarker?.remove();
       selectedMarker = null;
       selectedLocation.textContent = 'No place selected yet.';
-      formStatus.textContent = 'Pin submitted. Thank you!';
+      formStatus.textContent = contentWasCensored
+        ? 'Pin submitted. Some language was censored automatically.'
+        : 'Pin submitted. Thank you!';
     } catch (error) {
       if (error.code === 'permission-denied') {
         formStatus.textContent = 'Could not submit pin. The event may be paused or this QR code may be for the wrong event.';

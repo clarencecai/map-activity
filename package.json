@@ -23,6 +23,7 @@
   },
   "homepage": "https://github.com/clarencecai/map-activity#readme",
   "dependencies": {
+    "@2toad/profanity": "^3.3.0",
     "firebase": "^12.12.1",
     "leaflet": "^1.9.4",
     "qrcode": "^1.5.4"

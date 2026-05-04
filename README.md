@@ -32,6 +32,8 @@ firebase deploy --only hosting
 
 The admin allowlist lives in `/config/event.adminEmails` and is enforced by Firestore rules. It is not hardcoded in the frontend.
 
+Guest submissions automatically censor English profanities before they are written to Firestore. Standalone profanity is masked, and common inflected forms are masked only on the profane portion, for example `shit` -> `****` and `shitting` -> `****ting`.
+
 ## Demo pin seeding
 
 Generate realistic Asia travel pins with Firebase anonymous auth and the Firestore REST API:
