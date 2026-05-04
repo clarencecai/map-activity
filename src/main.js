@@ -33,6 +33,7 @@ import { censorProfanity } from './profanity.js';
 
 const TILE_URL = 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png';
 const TILE_ATTRIBUTION = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/attributions">CARTO</a>';
+const APP_TITLE = 'Travel Memories - Staff Appreciation Dinner 2026';
 const WORLD_BOUNDS = [[-60, -180], [85, 180]];
 const DISPLAY_WORLD_BOUNDS = [[-55, -180], [72, 140]];
 const DISPLAY_INITIAL_PAN = [130, 0];
@@ -191,7 +192,7 @@ function bindGoogleGate(renderGooglePage) {
   render(`
     <main class="center-page">
       <section class="card auth-card">
-        <p class="eyebrow">Travel Pin Map</p>
+        <p class="eyebrow">${APP_TITLE}</p>
         <h1>Checking login...</h1>
       </section>
     </main>
@@ -206,7 +207,7 @@ function bindGoogleGate(renderGooglePage) {
     render(`
       <main class="center-page">
         <section class="card auth-card">
-          <p class="eyebrow">Travel Pin Map</p>
+          <p class="eyebrow">${APP_TITLE}</p>
           <h1>Sign in to view the map</h1>
           <p>Use any Google account to open the TV display.</p>
           <div class="button-row">
@@ -234,7 +235,7 @@ function bindAdminGate(renderAdminPage) {
   render(`
     <main class="center-page">
       <section class="card auth-card">
-        <p class="eyebrow">Travel Pin Map</p>
+        <p class="eyebrow">${APP_TITLE}</p>
         <h1>Checking login...</h1>
       </section>
     </main>
@@ -245,7 +246,7 @@ function bindAdminGate(renderAdminPage) {
       render(`
         <main class="center-page">
           <section class="card auth-card">
-            <p class="eyebrow">Travel Pin Map</p>
+            <p class="eyebrow">${APP_TITLE}</p>
             <h1>Sign in to continue</h1>
             <p>Use a Google account included in the backend admin allowlist.</p>
             <div class="button-row">
@@ -262,7 +263,7 @@ function bindAdminGate(renderAdminPage) {
       render(`
         <main class="center-page">
           <section class="card auth-card">
-            <p class="eyebrow">Travel Pin Map</p>
+            <p class="eyebrow">${APP_TITLE}</p>
             <h1>Checking admin access...</h1>
           </section>
         </main>
@@ -281,7 +282,7 @@ function bindAdminGate(renderAdminPage) {
     render(`
       <main class="center-page">
         <section class="card auth-card">
-          <p class="eyebrow">Travel Pin Map</p>
+          <p class="eyebrow">${APP_TITLE}</p>
           <h1>Access not allowed</h1>
           <p>Signed in as <strong>${escapeHtml(user.email)}</strong>. This account is not included in the backend admin allowlist.</p>
           <div class="button-row">
@@ -423,7 +424,7 @@ function renderDisplay() {
       <main class="display-shell">
         <div id="display-map" class="display-map" aria-label="Live travel pin map"></div>
         <div class="display-title">
-          <h1 data-event-name>Travel Pin Map</h1>
+          <h1 data-event-name>${APP_TITLE}</h1>
           <p data-pin-count>Waiting for pins...</p>
         </div>
         <a class="guest-qr" data-guest-qr hidden target="_blank" rel="noreferrer">
@@ -906,7 +907,7 @@ function renderDisplay() {
       }
 
       const config = snapshot.data();
-      eventName.textContent = config.eventName || 'Travel Pin Map';
+      eventName.textContent = config.eventName || APP_TITLE;
       status.textContent = config.active ? 'Event is live' : 'Event is paused';
 
       if (config.eventKey) {
@@ -1001,7 +1002,7 @@ function renderGuest() {
     render(`
       <main class="center-page guest-bg">
         <section class="card auth-card">
-          <p class="eyebrow">Travel Pin Map</p>
+          <p class="eyebrow">${APP_TITLE}</p>
           <h1>Missing event key</h1>
           <p>Scan the event QR code again. Guest links must include <code>?k=event-key</code>.</p>
         </section>
@@ -1013,7 +1014,7 @@ function renderGuest() {
   render(`
     <main class="guest-shell guest-bg">
       <section class="guest-card card">
-        <p class="eyebrow">Travel Pin Map</p>
+        <p class="eyebrow">${APP_TITLE}</p>
         <h1>Drop a pin somewhere you have travelled</h1>
         <p class="muted">Tap the map to choose a place, then tell us who you are and what it means to you.</p>
         <div class="city-search">
@@ -1297,7 +1298,7 @@ function renderAdmin() {
         <header class="admin-header">
           <div>
             <p class="eyebrow">Admin</p>
-            <h1>Travel Pin Map</h1>
+            <h1>${APP_TITLE}</h1>
           </div>
           <button class="secondary-button" data-admin-sign-out>Sign out</button>
         </header>
@@ -1455,7 +1456,7 @@ function renderNotFound() {
   render(`
     <main class="center-page">
       <section class="card auth-card">
-        <p class="eyebrow">Travel Pin Map</p>
+        <p class="eyebrow">${APP_TITLE}</p>
         <h1>Page not found</h1>
         <p>Use <code>/</code> for the TV display, <code>/guest?k=event-key</code> for guests, or <code>/admin</code> for admin.</p>
       </section>
