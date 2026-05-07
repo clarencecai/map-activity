@@ -27,7 +27,6 @@ import {
 } from 'firebase/firestore';
 import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png';
 import markerIcon from 'leaflet/dist/images/marker-icon.png';
-import markerShadow from 'leaflet/dist/images/marker-shadow.png';
 import { auth, db, missingFirebaseConfig } from './firebase.js';
 import { censorProfanity } from './profanity.js';
 
@@ -59,22 +58,18 @@ const app = document.querySelector('#app');
 const pinIcon = L.icon({
   iconRetinaUrl: markerIcon2x,
   iconUrl: markerIcon,
-  shadowUrl: markerShadow,
   iconSize: [25, 41],
   iconAnchor: [12, 41],
   popupAnchor: [1, -34],
-  shadowSize: [41, 41],
 });
 
 const animatedPinIcon = L.icon({
   iconRetinaUrl: markerIcon2x,
   iconUrl: markerIcon,
-  shadowUrl: markerShadow,
   className: 'pin-marker pin-marker--new',
   iconSize: [25, 41],
   iconAnchor: [12, 41],
   popupAnchor: [1, -34],
-  shadowSize: [41, 41],
 });
 
 const activeCleanups = [];
@@ -573,13 +568,14 @@ function renderDisplay() {
       highlightedMarkers.clear();
     };
 
-    const positionPinSpotlight = (marker, pin, occupiedRects, featuredPinRects, staggerIndex) => {
+    const positionPinSpotlight = (marker, pin, occupiedRects, blockedPinRects, featuredPinRects, staggerIndex) => {
       const container = map.getContainer();
       const containerRect = container.getBoundingClientRect();
       const point = map.latLngToContainerPoint(marker.getLatLng());
       const ownPinRect = getPinAvoidRect(marker);
       const overlayRects = [
         ...getOverlayRects(),
+        ...blockedPinRects,
         ...(ownPinRect ? [ownPinRect] : []),
         ...featuredPinRects,
         ...occupiedRects,
@@ -720,6 +716,9 @@ function renderDisplay() {
       hidePinSpotlight();
       const occupiedRects = [];
       const featuredPinRects = [];
+      const blockedPinRects = candidates
+        .map(({ marker }) => getPinAvoidRect(marker))
+        .filter(Boolean);
       const sortedCandidates = candidates
         .map((candidate) => ({
           ...candidate,
@@ -732,7 +731,7 @@ function renderDisplay() {
           || a.randomTieBreaker - b.randomTieBreaker);
 
       for (const { id, marker, pin } of sortedCandidates) {
-        if (positionPinSpotlight(marker, pin, occupiedRects, featuredPinRects, occupiedRects.length)) {
+        if (positionPinSpotlight(marker, pin, occupiedRects, blockedPinRects, featuredPinRects, occupiedRects.length)) {
           shownPinCounts.set(id, (shownPinCounts.get(id) || 0) + 1);
         }
 

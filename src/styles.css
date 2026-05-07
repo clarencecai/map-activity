@@ -223,8 +223,10 @@ button:disabled {
 
 .display-title h1 {
   margin: 0;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
-  font-size: clamp(1.65rem, 4vw, 3.5rem);
+  font-size: clamp(1.35rem, 2.1vw, 2.6rem);
   line-height: 1;
   color: var(--ink);
   text-overflow: ellipsis;
