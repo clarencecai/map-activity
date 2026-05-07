@@ -487,6 +487,7 @@ function renderDisplay() {
     let currentFocusBounds = L.latLngBounds(DISPLAY_WORLD_BOUNDS);
     const highlightedMarkers = new Set();
     const shownPinCounts = new Map();
+    let lastShownBatchIds = new Set();
 
     const getOverlayRects = () => {
       const container = map.getContainer();
@@ -719,23 +720,34 @@ function renderDisplay() {
       const blockedPinRects = candidates
         .map(({ marker }) => getPinAvoidRect(marker))
         .filter(Boolean);
-      const sortedCandidates = candidates
+      const rankedCandidates = candidates
         .map((candidate) => ({
           ...candidate,
           shownCount: shownPinCounts.get(candidate.id) || 0,
           createdAtMs: createdAtMillis(candidate.pin),
           randomTieBreaker: Math.random(),
-        }))
+        }));
+      const sortCandidates = (items) => items
         .sort((a, b) => a.shownCount - b.shownCount
           || b.createdAtMs - a.createdAtMs
           || a.randomTieBreaker - b.randomTieBreaker);
+      const preferredCandidates = sortCandidates(
+        rankedCandidates.filter((candidate) => !lastShownBatchIds.has(candidate.id)),
+      );
+      const fallbackCandidates = sortCandidates(
+        rankedCandidates.filter((candidate) => lastShownBatchIds.has(candidate.id)),
+      );
+      const sortedCandidates = [...preferredCandidates, ...fallbackCandidates];
+      const shownThisRoundIds = new Set();
 
       for (const { id, marker, pin } of sortedCandidates) {
         if (positionPinSpotlight(marker, pin, occupiedRects, blockedPinRects, featuredPinRects, occupiedRects.length)) {
           shownPinCounts.set(id, (shownPinCounts.get(id) || 0) + 1);
+          shownThisRoundIds.add(id);
         }
 
         if (occupiedRects.length >= PIN_DETAILS_PER_BATCH) {
+          lastShownBatchIds = shownThisRoundIds;
           scheduleNextPinDetails();
           return;
         }
@@ -743,6 +755,10 @@ function renderDisplay() {
 
       if (occupiedRects.length === 0) {
         hidePinSpotlight();
+      }
+
+      if (shownThisRoundIds.size > 0) {
+        lastShownBatchIds = shownThisRoundIds;
       }
 
       scheduleNextPinDetails();
@@ -950,6 +966,7 @@ function renderDisplay() {
             markers.get(id)?.marker.remove();
             markers.delete(id);
             shownPinCounts.delete(id);
+            lastShownBatchIds.delete(id);
             return;
           }
 
