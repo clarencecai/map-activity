@@ -41,6 +41,8 @@ const DISPLAY_ANIMATION_HOLD_MS = 20000;
 const DISPLAY_WORLD_VIEW_HOLD_MS = 60000;
 const RANDOM_PIN_DETAILS_MS = 8000;
 const PIN_DETAILS_PER_BATCH = 5;
+const VERSION_CHECK_INTERVAL_MS = 60000;
+const DISPLAY_PREFERENCES_STORAGE_KEY = 'map-activity:display-preferences';
 const CITY_INDEX_URL = '/cities.min.json';
 const DISPLAY_ANIMATION_VIEWS = [
   { label: 'Europe', shortLabel: 'EU', bounds: [[35, -12], [72, 35]] },
@@ -74,6 +76,124 @@ const animatedPinIcon = L.icon({
 
 const activeCleanups = [];
 let cityIndexPromise = null;
+
+function assetSignatureFromDocument(doc, baseUrl = window.location.origin) {
+  return Array.from(doc.querySelectorAll('script[src], link[rel="stylesheet"][href]'))
+    .map((element) => new URL(element.getAttribute('src') || element.getAttribute('href'), baseUrl).pathname)
+    .sort()
+    .join('|');
+}
+
+function startDeploymentRefreshPolling() {
+  if (!import.meta.env.PROD || typeof window === 'undefined') {
+    return;
+  }
+
+  let currentSignature = assetSignatureFromDocument(document);
+  let isChecking = false;
+  let hasReloadScheduled = false;
+
+  const checkForDeployment = async () => {
+    if (isChecking || hasReloadScheduled || document.visibilityState === 'hidden') {
+      return;
+    }
+
+    isChecking = true;
+
+    try {
+      const response = await fetch(`/index.html?ts=${Date.now()}`, {
+        cache: 'no-store',
+        headers: {
+          'cache-control': 'no-cache',
+        },
+      });
+
+      if (!response.ok) {
+        return;
+      }
+
+      const nextHtml = await response.text();
+      const nextDocument = new DOMParser().parseFromString(nextHtml, 'text/html');
+      const nextSignature = assetSignatureFromDocument(nextDocument);
+
+      if (!currentSignature) {
+        currentSignature = nextSignature;
+        return;
+      }
+
+      if (nextSignature && nextSignature !== currentSignature) {
+        hasReloadScheduled = true;
+        window.location.reload();
+      }
+    } catch {
+      // Ignore transient network failures and retry on the next interval.
+    } finally {
+      isChecking = false;
+    }
+  };
+
+  window.setInterval(checkForDeployment, VERSION_CHECK_INTERVAL_MS);
+  window.addEventListener('focus', checkForDeployment);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      checkForDeployment();
+    }
+  });
+}
+
+function readDisplayPreferences() {
+  if (typeof window === 'undefined') {
+    return {
+      animate: false,
+      showMessages: false,
+    };
+  }
+
+  try {
+    const rawValue = window.localStorage.getItem(DISPLAY_PREFERENCES_STORAGE_KEY);
+    if (!rawValue) {
+      return {
+        animate: false,
+        showMessages: false,
+      };
+    }
+
+    const parsed = JSON.parse(rawValue);
+    const animate = parsed?.animate === true;
+    const showMessages = !animate && parsed?.showMessages === true;
+
+    return {
+      animate,
+      showMessages,
+    };
+  } catch {
+    return {
+      animate: false,
+      showMessages: false,
+    };
+  }
+}
+
+function writeDisplayPreferences(preferences) {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  try {
+    const animate = preferences.animate === true;
+    const showMessages = !animate && preferences.showMessages === true;
+
+    window.localStorage.setItem(
+      DISPLAY_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        animate,
+        showMessages,
+      }),
+    );
+  } catch {
+    // Ignore storage failures and continue with in-memory state.
+  }
+}
 
 function cleanup() {
   while (activeCleanups.length > 0) {
@@ -170,16 +290,23 @@ function signInWithGoogle() {
   return signInWithPopup(auth, provider);
 }
 
-async function verifyAdminAccess(user) {
+async function verifyAllowlistAccess(user) {
   if (!user || !user.email) {
     return false;
   }
 
-  const adminConfig = await getDoc(doc(db, 'config', 'admin'));
-  return adminConfig.exists() && auth.currentUser?.uid === user.uid;
+  const eventConfig = await getDoc(doc(db, 'config', 'event'));
+  return eventConfig.exists() && auth.currentUser?.uid === user.uid;
 }
 
-function bindGoogleGate(renderGooglePage) {
+function bindAllowlistGate(renderAllowedPage, options = {}) {
+  const {
+    checkingTitle = 'Checking login...',
+    signInTitle = 'Sign in to continue',
+    signInMessage = 'Use a Google account included in the backend allowlist.',
+    deniedTitle = 'Access not allowed',
+  } = options;
+
   if (!requireFirebase()) {
     return;
   }
@@ -188,50 +315,7 @@ function bindGoogleGate(renderGooglePage) {
     <main class="center-page">
       <section class="card auth-card">
         <p class="eyebrow">${APP_TITLE}</p>
-        <h1>Checking login...</h1>
-      </section>
-    </main>
-  `);
-
-  onAuthStateChanged(auth, (user) => {
-    if (user?.email) {
-      renderGooglePage(user);
-      return;
-    }
-
-    render(`
-      <main class="center-page">
-        <section class="card auth-card">
-          <p class="eyebrow">${APP_TITLE}</p>
-          <h1>Sign in to view the map</h1>
-          <p>Use any Google account to open the TV display.</p>
-          <div class="button-row">
-            <button class="primary-button" data-google-login>${user ? 'Switch to Google sign-in' : 'Sign in with Google'}</button>
-          </div>
-        </section>
-      </main>
-    `);
-
-    app.querySelector('[data-google-login]')?.addEventListener('click', () => {
-      if (auth.currentUser) {
-        signOut(auth).then(signInWithGoogle);
-        return;
-      }
-      signInWithGoogle();
-    });
-  });
-}
-
-function bindAdminGate(renderAdminPage) {
-  if (!requireFirebase()) {
-    return;
-  }
-
-  render(`
-    <main class="center-page">
-      <section class="card auth-card">
-        <p class="eyebrow">${APP_TITLE}</p>
-        <h1>Checking login...</h1>
+        <h1>${checkingTitle}</h1>
       </section>
     </main>
   `);
@@ -242,8 +326,8 @@ function bindAdminGate(renderAdminPage) {
         <main class="center-page">
           <section class="card auth-card">
             <p class="eyebrow">${APP_TITLE}</p>
-            <h1>Sign in to continue</h1>
-            <p>Use a Google account included in the backend admin allowlist.</p>
+            <h1>${signInTitle}</h1>
+            <p>${signInMessage}</p>
             <div class="button-row">
               <button class="primary-button" data-google-login>Sign in with Google</button>
             </div>
@@ -259,13 +343,13 @@ function bindAdminGate(renderAdminPage) {
         <main class="center-page">
           <section class="card auth-card">
             <p class="eyebrow">${APP_TITLE}</p>
-            <h1>Checking admin access...</h1>
+            <h1>Checking access...</h1>
           </section>
         </main>
       `);
-      const hasAccess = await verifyAdminAccess(user);
+      const hasAccess = await verifyAllowlistAccess(user);
       if (hasAccess) {
-        renderAdminPage(user);
+        renderAllowedPage(user);
         return;
       }
     } catch (error) {
@@ -278,8 +362,8 @@ function bindAdminGate(renderAdminPage) {
       <main class="center-page">
         <section class="card auth-card">
           <p class="eyebrow">${APP_TITLE}</p>
-          <h1>Access not allowed</h1>
-          <p>Signed in as <strong>${escapeHtml(user.email)}</strong>. This account is not included in the backend admin allowlist.</p>
+          <h1>${deniedTitle}</h1>
+          <p>Signed in as <strong>${escapeHtml(user.email)}</strong>. This account is not included in the backend allowlist.</p>
           <div class="button-row">
             <button class="primary-button" data-google-login>Switch account</button>
             <button class="secondary-button" data-sign-out>Sign out</button>
@@ -293,11 +377,17 @@ function bindAdminGate(renderAdminPage) {
         signOut(auth).then(signInWithGoogle);
         return;
       }
+
       signInWithGoogle();
     });
     app.querySelector('[data-sign-out]')?.addEventListener('click', () => signOut(auth));
   });
+}
 
+function bindAdminGate(renderAdminPage) {
+  bindAllowlistGate(renderAdminPage, {
+    signInMessage: 'Use a Google account included in the backend admin allowlist.',
+  });
 }
 
 function createBaseMap(element, options = {}) {
@@ -358,10 +448,10 @@ function createPinPopup(pin) {
 
 function createPinSpotlight(pin) {
   return `
-    <p class="pin-spotlight-label">Now showing</p>
     <h2>${escapeHtml(pin.locationName)}</h2>
     <p class="pin-spotlight-person">Shared by ${escapeHtml(pin.userName || 'Guest')}</p>
     ${pin.note ? `<p class="pin-spotlight-note">${escapeHtml(pin.note)}</p>` : ''}
+    <p class="pin-spotlight-posted">${escapeHtml(formatDisplayPostedAt(pin.createdAt))}</p>
   `;
 }
 
@@ -379,6 +469,18 @@ function createdAtMillis(pin) {
   }
 
   return 0;
+}
+
+function formatDisplayPostedAt(timestamp) {
+  if (!timestamp?.toDate) {
+    return 'Posted time pending';
+  }
+
+  return `Posted ${timestamp.toDate().toLocaleString('en-SG', {
+    timeZone: 'Asia/Singapore',
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  })} SGT`;
 }
 
 function createTravelPin(pin, animate = true) {
@@ -414,7 +516,7 @@ function moveToDisplayHome(map, animate = true) {
 }
 
 function renderDisplay() {
-  bindGoogleGate(() => {
+  bindAllowlistGate(() => {
     render(`
       <main class="display-shell">
         <div id="display-map" class="display-map" aria-label="Live travel pin map"></div>
@@ -478,6 +580,7 @@ function renderDisplay() {
     const showMessagesToggle = app.querySelector('[data-show-messages-toggle]');
     const pinSpotlightLayer = app.querySelector('[data-pin-spotlight-layer]');
     const viewButtons = Array.from(app.querySelectorAll('[data-view-index]'));
+    const persistedDisplayPreferences = readDisplayPreferences();
     let lastGuestUrl = '';
     let animationTimer = null;
     let pinDetailsTimer = null;
@@ -485,9 +588,15 @@ function renderDisplay() {
     let nextPinDetailsAllowedAt = 0;
     let currentViewEndsAt = 0;
     let currentFocusBounds = L.latLngBounds(DISPLAY_WORLD_BOUNDS);
+    let mapViewIsTransitioning = false;
+    let mapViewTransitionToken = 0;
     const highlightedMarkers = new Set();
     const shownPinCounts = new Map();
     let lastShownBatchIds = new Set();
+    let currentDisplayedBatchIds = [];
+
+    animationToggle.checked = persistedDisplayPreferences.animate;
+    showMessagesToggle.checked = persistedDisplayPreferences.showMessages;
 
     const getOverlayRects = () => {
       const container = map.getContainer();
@@ -679,6 +788,7 @@ function renderDisplay() {
       pinSpotlightLayer.innerHTML = '';
       pinSpotlightLinePane.replaceChildren();
       clearHighlightedMarkers();
+      currentDisplayedBatchIds = [];
     };
 
     const messagesAreEnabled = () => animationToggle.checked || showMessagesToggle.checked;
@@ -691,8 +801,13 @@ function renderDisplay() {
     };
 
     const showRandomPinDetails = () => {
+      if (mapViewIsTransitioning) {
+        pinDetailsTimer = window.setTimeout(showRandomPinDetails, 150);
+        return;
+      }
+
+      currentFocusBounds = map.getBounds();
       if (!animationToggle.checked) {
-        currentFocusBounds = map.getBounds();
         currentViewEndsAt = Number.POSITIVE_INFINITY;
       }
 
@@ -713,6 +828,15 @@ function renderDisplay() {
         return;
       }
 
+      const candidateIdSet = new Set(candidates.map(({ id }) => id));
+      if (currentDisplayedBatchIds.length > 0
+        && candidates.length <= PIN_DETAILS_PER_BATCH
+        && currentDisplayedBatchIds.length === candidateIdSet.size
+        && currentDisplayedBatchIds.every((id) => candidateIdSet.has(id))) {
+        scheduleNextPinDetails();
+        return;
+      }
+
       map.closePopup();
       hidePinSpotlight();
       const occupiedRects = [];
@@ -728,8 +852,8 @@ function renderDisplay() {
           randomTieBreaker: Math.random(),
         }));
       const sortCandidates = (items) => items
-        .sort((a, b) => a.shownCount - b.shownCount
-          || b.createdAtMs - a.createdAtMs
+        .sort((a, b) => b.createdAtMs - a.createdAtMs
+          || a.shownCount - b.shownCount
           || a.randomTieBreaker - b.randomTieBreaker);
       const preferredCandidates = sortCandidates(
         rankedCandidates.filter((candidate) => !lastShownBatchIds.has(candidate.id)),
@@ -739,15 +863,18 @@ function renderDisplay() {
       );
       const sortedCandidates = [...preferredCandidates, ...fallbackCandidates];
       const shownThisRoundIds = new Set();
+      const renderedBatchIds = [];
 
       for (const { id, marker, pin } of sortedCandidates) {
         if (positionPinSpotlight(marker, pin, occupiedRects, blockedPinRects, featuredPinRects, occupiedRects.length)) {
           shownPinCounts.set(id, (shownPinCounts.get(id) || 0) + 1);
           shownThisRoundIds.add(id);
+          renderedBatchIds.push(id);
         }
 
         if (occupiedRects.length >= PIN_DETAILS_PER_BATCH) {
           lastShownBatchIds = shownThisRoundIds;
+          currentDisplayedBatchIds = renderedBatchIds;
           scheduleNextPinDetails();
           return;
         }
@@ -759,6 +886,7 @@ function renderDisplay() {
 
       if (shownThisRoundIds.size > 0) {
         lastShownBatchIds = shownThisRoundIds;
+        currentDisplayedBatchIds = renderedBatchIds;
       }
 
       scheduleNextPinDetails();
@@ -787,18 +915,6 @@ function renderDisplay() {
         button.classList.toggle('view-jump-button--active', isActive);
         button.setAttribute('aria-pressed', String(isActive));
       });
-    };
-
-    const scheduleAnimationStep = (viewHoldMs) => {
-      pinDetailsTimer = window.setTimeout(() => {
-        if (animationToggle.checked) {
-          showRandomPinDetails();
-        }
-      }, animationDurationMs());
-      animationTimer = window.setTimeout(
-        runAnimationStep,
-        animationDurationMs() + viewHoldMs,
-      );
     };
 
     const viewHasMessagePins = (view) => {
@@ -833,8 +949,27 @@ function renderDisplay() {
       hidePinSpotlight();
       setActiveViewButton(normalizedIndex);
       currentFocusBounds = L.latLngBounds(view.bounds);
-      nextPinDetailsAllowedAt = Date.now() + animationDurationMs();
-      currentViewEndsAt = Date.now() + animationDurationMs() + viewHoldMs;
+      nextPinDetailsAllowedAt = Number.POSITIVE_INFINITY;
+      currentViewEndsAt = Number.POSITIVE_INFINITY;
+      mapViewIsTransitioning = true;
+      const transitionToken = ++mapViewTransitionToken;
+      map.once('moveend', () => {
+        if (transitionToken !== mapViewTransitionToken) {
+          return;
+        }
+
+        mapViewIsTransitioning = false;
+        nextPinDetailsAllowedAt = Date.now();
+        currentViewEndsAt = animationToggle.checked ? Date.now() + viewHoldMs : Number.POSITIVE_INFINITY;
+
+        if (messagesAreEnabled()) {
+          showRandomPinDetails();
+        }
+
+        if (continueAnimation) {
+          animationTimer = window.setTimeout(runAnimationStep, viewHoldMs);
+        }
+      });
 
       if (view.home) {
         moveToDisplayHome(map);
@@ -847,17 +982,14 @@ function renderDisplay() {
       }
 
       animationStep = (normalizedIndex + 1) % DISPLAY_ANIMATION_VIEWS.length;
-      if (continueAnimation) {
-        scheduleAnimationStep(viewHoldMs);
-      } else if (showMessagesToggle.checked) {
-        pinDetailsTimer = window.setTimeout(startStaticMessages, animationDurationMs());
-      }
     };
 
     const stopAnimation = (returnHome = true) => {
       window.clearTimeout(animationTimer);
       animationTimer = null;
       animationStep = 0;
+      mapViewTransitionToken += 1;
+      mapViewIsTransitioning = false;
       map.stop();
       stopMessagePlayback();
       if (returnHome) {
@@ -874,6 +1006,13 @@ function renderDisplay() {
       showAnimationView(nextPopulatedAnimationViewIndex(animationStep), true);
     };
 
+    const persistDisplayPreferences = () => {
+      writeDisplayPreferences({
+        animate: animationToggle.checked,
+        showMessages: showMessagesToggle.checked,
+      });
+    };
+
     animationToggle.addEventListener('change', () => {
       if (animationToggle.checked) {
         showMessagesToggle.checked = false;
@@ -881,6 +1020,8 @@ function renderDisplay() {
       } else {
         stopAnimation();
       }
+
+      persistDisplayPreferences();
     });
 
     showMessagesToggle.addEventListener('change', () => {
@@ -895,6 +1036,8 @@ function renderDisplay() {
       } else if (!animationToggle.checked) {
         stopMessagePlayback();
       }
+
+      persistDisplayPreferences();
     });
 
     viewButtons.forEach((button) => {
@@ -908,6 +1051,12 @@ function renderDisplay() {
       });
     });
     setActiveViewButton(DISPLAY_ANIMATION_VIEWS.findIndex((view) => view.home));
+
+    if (animationToggle.checked) {
+      runAnimationStep();
+    } else if (showMessagesToggle.checked) {
+      startStaticMessages();
+    }
 
     const updatePinCount = () => {
       const count = markers.size;
@@ -1494,4 +1643,5 @@ function boot() {
   }
 }
 
+startDeploymentRefreshPolling();
 boot();

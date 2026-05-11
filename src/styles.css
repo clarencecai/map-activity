@@ -436,6 +436,12 @@ button:disabled {
   font-weight: 800;
 }
 
+.pin-spotlight-posted {
+  margin: 0.7rem 0 0;
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+}
+
 .pin-spotlight-note {
   border-left: 3px solid var(--accent);
   margin: 0.75rem 0 0;
