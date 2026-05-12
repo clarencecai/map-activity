@@ -303,7 +303,7 @@ function bindAllowlistGate(renderAllowedPage, options = {}) {
   const {
     checkingTitle = 'Checking login...',
     signInTitle = 'Sign in to continue',
-    signInMessage = 'Use a Google account included in the backend allowlist.',
+    signInMessage = 'Sign in with Google to continue.',
     deniedTitle = 'Access not allowed',
   } = options;
 
@@ -325,7 +325,6 @@ function bindAllowlistGate(renderAllowedPage, options = {}) {
       render(`
         <main class="center-page">
           <section class="card auth-card">
-            <p class="eyebrow">${APP_TITLE}</p>
             <h1>${signInTitle}</h1>
             <p>${signInMessage}</p>
             <div class="button-row">
@@ -361,9 +360,9 @@ function bindAllowlistGate(renderAllowedPage, options = {}) {
     render(`
       <main class="center-page">
         <section class="card auth-card">
-          <p class="eyebrow">${APP_TITLE}</p>
           <h1>${deniedTitle}</h1>
-          <p>Signed in as <strong>${escapeHtml(user.email)}</strong>. This account is not included in the backend allowlist.</p>
+          <p>Signed in as <strong>${escapeHtml(user.email)}</strong>.</p>
+          <p>You do not have permission to view this page.</p>
           <div class="button-row">
             <button class="primary-button" data-google-login>Switch account</button>
             <button class="secondary-button" data-sign-out>Sign out</button>
@@ -385,9 +384,7 @@ function bindAllowlistGate(renderAllowedPage, options = {}) {
 }
 
 function bindAdminGate(renderAdminPage) {
-  bindAllowlistGate(renderAdminPage, {
-    signInMessage: 'Use a Google account included in the backend admin allowlist.',
-  });
+  bindAllowlistGate(renderAdminPage);
 }
 
 function createBaseMap(element, options = {}) {
